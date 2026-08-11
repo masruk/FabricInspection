@@ -4,9 +4,10 @@
 | Field | Value |
 |---|---|
 | Document | SRS — Camera Acquisition Service |
-| Version | **2.0** (transport changed to RabbitMQ) |
+| Version | **3.0** (implementation language changed to Python) |
 | Status | Pending team sign-off |
 | Target platform | Hikrobot MV-VC3501X-128G60 vision box, Windows / Windows IoT |
+| Implementation language | **Python 3.12 (CPython, 64-bit)** |
 | Module owner | Camera subsystem |
 | Primary consumer | Inference service on NVIDIA Jetson Orin Nano Super |
 
@@ -15,7 +16,12 @@
 | Ver | Change | Reason |
 |---|---|---|
 | 1.0 | Initial issue; gRPC streaming transport | — |
-| **2.0** | **Transport changed to RabbitMQ (AMQP 0-9-1).** Per-camera queues; broker-side queue limiting; control plane moved to REST + CLI; Frame Set bundling replaced by per-camera publish with shared correlation ID | AI team standardised on RabbitMQ |
+| 2.0 | **Transport changed to RabbitMQ (AMQP 0-9-1).** Per-camera queues; broker-side queue limiting; control plane moved to REST + CLI; Frame Set bundling replaced by per-camera publish with shared correlation ID | AI team standardised on RabbitMQ |
+| **3.0** | **Implementation language changed from C++17 to Python 3.12.** Camera access moves to the MVS Python SDK (ctypes); AMQP client becomes `pika`; REST server becomes Flask + waitress; Windows Service hosting becomes `pywin32`. **No functional requirement, message header, queue argument, topology name, state name, or acceptance criterion changes.** Additions are confined to CON-003, CON-011, ASM-008, ASM-009, NFR-305, NFR-306, OP-109 and open items 10–12 | Team decision — Python is the team's working language and matches the consumer side, shortening the path to a maintainable, debuggable service |
+
+> **Contract stability.** §5.1 (message contract), §5.3 (REST API) and §6.1 (state machine) are
+> byte-for-byte identical to v2.0. The Jetson consumer is unaffected by the language change and
+> requires no rework. This is a deliberate constraint on the port, not a coincidence.
 
 ---
 
@@ -60,8 +66,14 @@ with identifying metadata to a RabbitMQ broker for consumption by the inference 
 
 ### 1.4 Reference documents
 - `SDD-camera-acquisition-service.md` — design realisation
-- Hikrobot MVS SDK Developer Guide (Windows, C) V4.8.0
+- **Machine Vision Camera SDK Developer Guide (Windows, Python) V4.8.0** —
+  `C:\Program Files (x86)\MVS\Development\Documentations\` — the authoritative Python API reference
+- **MVS Python samples** — `C:\Program Files (x86)\MVS\Development\Samples\Python\` — the validated
+  call sequences (`General\GrabImage`, `General\ConvertPixelType`, `AreaScanCamera\MultipleCameras`)
+- **MVS Python binding source** — `…\Samples\Python\MvImport\` — `MvCameraControl_class.py`,
+  `CameraParams_header.py`, `MvErrorDefine_const.py`, `PixelType_header.py`
 - RabbitMQ AMQP 0-9-1 specification and queue-length-limit documentation
+- `pika` documentation (AMQP 0-9-1 client), `pywin32` service framework documentation
 
 ---
 
@@ -130,7 +142,7 @@ flowchart LR
 | ID | Constraint |
 |---|---|
 | CON-002 | Target OS is Windows / Windows IoT; FCAS runs as a Windows Service under Session 0 (no GUI, no desktop interaction) |
-| CON-003 | Camera access via Hikrobot MVS SDK (Windows, C API) |
+| CON-003 | Camera access via the **Hikrobot MVS Python SDK** (`MvImport`, a `ctypes` binding over `MvCameraControl.dll`). The binding is loaded from the MVS installation via `MVCAM_COMMON_RUNENV`; it is **not** vendored into this repository and is never modified |
 | CON-004 | Cameras connect over USB3; all three share the vision box's USB controllers |
 | CON-005 | Delivery model is **best-effort** — frames are discarded rather than allowed to accumulate |
 | CON-006 | Wire format is **debayered RGB8**, produced on the vision box |
@@ -138,6 +150,7 @@ flowchart LR
 | **CON-008** | **Transport is RabbitMQ (AMQP 0-9-1), one queue per camera** — team decision |
 | **CON-009** | **Messages are transient (non-persistent).** Persisting 16 MB/s of best-effort image data would consume disk write bandwidth and endurance for data that is intentionally discardable |
 | **CON-010** | **The broker runs on the vision box** (see §2.5) so that publishing is a local operation and can never block acquisition on network I/O |
+| **CON-011** | **Implementation language is Python 3.12 (CPython, 64-bit).** The service is hosted under the Windows SCM through `pywin32`. All third-party packages must be installable offline from a pinned wheelhouse, since the vision box has no assured internet access |
 
 ### 2.5 Broker placement rationale
 
@@ -170,6 +183,8 @@ loss, inference stall) rather than a routine occurrence.
 | ASM-005 | The ML model is trained on RGB8 images equivalent to those produced by MVS debayering |
 | **ASM-006** | **RabbitMQ (3.11+) plus the Erlang runtime can be installed and run on the vision box** within its RAM budget |
 | **ASM-007** | **The consumer correlates the three per-camera streams by `trigger_id`** to reconstruct a full-width slice |
+| **ASM-008** | **A 64-bit CPython 3.12 runtime and the pinned dependency set can be installed on the vision box** and started by the SCM under a service account. The MVS Python binding is present in the MVS installation and `MVCAM_COMMON_RUNENV` is set as a **machine-scope** environment variable, so a service account can resolve it |
+| **ASM-009** | **The MVS `ctypes` binding releases the GIL for the duration of every SDK call** (it loads `MvCameraControl.dll` via `WinDLL`, which does). Per-camera acquisition threads therefore overlap genuinely rather than serialising — see SDD §4.5 |
 
 ---
 
@@ -179,7 +194,7 @@ loss, inference stall) rather than a routine occurrence.
 
 | ID | Requirement | Priority |
 |---|---|---|
-| FR-101 | FCAS SHALL enumerate connected Hikrobot USB3 cameras at startup using the MVS SDK. | Must |
+| FR-101 | FCAS SHALL enumerate connected Hikrobot USB3 cameras at startup using the MVS Python SDK (`MV_CC_EnumDevices`). | Must |
 | FR-102 | FCAS SHALL continuously detect cameras connected or disconnected at runtime (hot-plug), by polling enumeration at a configurable interval (default 3 s) and/or Windows device notifications. | Must |
 | FR-103 | FCAS SHALL identify each camera by its **serial number**, and map it to a **logical camera ID** (`LEFT`/`CENTER`/`RIGHT`) via configuration. USB port order SHALL NOT be used for identity. | Must |
 | FR-104 | On detecting a camera whose serial is present in configuration, FCAS SHALL automatically open it, apply its configuration profile, and include it in acquisition without operator action. | Must |
@@ -223,7 +238,7 @@ loss, inference stall) rather than a routine occurrence.
 
 | ID | Requirement | Priority |
 |---|---|---|
-| FR-401 | FCAS SHALL convert each captured image from its native (Bayer) format to **RGB8** using the MVS SDK conversion API. | Must |
+| FR-401 | FCAS SHALL convert each captured image from its native (Bayer) format to **RGB8** using the MVS SDK conversion API (`MV_CC_ConvertPixelTypeEx`). Conversion SHALL write directly into a pre-allocated pooled buffer; FCAS SHALL NOT allocate a destination buffer per frame. | Must |
 | FR-402 | Bayer interpolation quality SHALL be configurable, defaulting to the balanced setting. | Should |
 | FR-403 | FCAS SHALL NOT apply lossy compression to published images. | Must |
 | FR-404 | FCAS SHALL perform no cropping, scaling, or enhancement beyond configured camera ROI, debayering, and configured contrast/gamma. | Must |
@@ -277,8 +292,8 @@ loss, inference stall) rather than a routine occurrence.
 | NFR-101 | End-to-end latency from trigger pulse to message accepted by the broker SHALL be ≤ **300 ms** (p99). |
 | NFR-102 | FCAS SHALL sustain the nominal trigger rate (0.36/s per camera) with **zero** local discards while the broker is reachable and the consumer is keeping up. |
 | NFR-103 | FCAS SHALL support trigger rates up to **2/s per camera** without local loss, to accommodate future line-speed increases. |
-| NFR-104 | Steady-state CPU utilisation by FCAS SHALL be ≤ 30% of the vision box's total capacity at nominal rate, **excluding** broker overhead. |
-| NFR-105 | FCAS memory consumption SHALL be bounded and stable; growth over a 7-day continuous run SHALL be < 5%. |
+| NFR-104 | Steady-state CPU utilisation by FCAS SHALL be ≤ 30% of the vision box's total capacity at nominal rate, **excluding** broker overhead. Measurement includes the Python interpreter itself. |
+| NFR-105 | FCAS memory consumption SHALL be bounded and stable; growth over a 7-day continuous run SHALL be < 5%, measured from a **post-warm-up** baseline (the interpreter's allocator settles over the first minutes of operation). |
 | NFR-106 | Broker memory attributable to camera queues SHALL be bounded by queue length limits; the computed worst case SHALL be documented and verified against available RAM. |
 
 ### 4.2 Reliability & availability
@@ -302,6 +317,8 @@ loss, inference stall) rather than a routine occurrence.
 | NFR-302 | The message contract (§5.1) SHALL be versioned and published as the authoritative interface document. |
 | NFR-303 | Every message SHALL carry a `schema_version` header. |
 | NFR-304 | Interface changes SHALL follow semantic versioning; breaking changes require a major version and a documented migration note. |
+| **NFR-305** | **The codebase SHALL be fully type-annotated and SHALL pass `mypy --strict` and `ruff` with no errors.** In a dynamically-typed language driving a `ctypes` C API and a 24/7 service, static checking is the substitute for the compiler the C++ version had; it is a gate, not a suggestion. |
+| **NFR-306** | **The deployed dependency set SHALL be pinned to exact versions** in a lockfile and installable offline. An unpinned transitive upgrade must never be able to change the behaviour of a running line. |
 
 ### 4.4 Security
 
@@ -380,9 +397,12 @@ Small JSON payload published to `fabric.telemetry` at a configurable interval (d
 containing the fields listed in FR-701.
 
 ### 5.2 Camera interface
-- Hikrobot MVS SDK (Windows C API), USB3 Vision transport
-- Hardware trigger via camera Line0 (or as wired), configured through `TriggerMode` /
-  `TriggerSource` / `TriggerActivation`
+- Hikrobot **MVS Python SDK** (`MvImport.MvCameraControl_class.MvCamera`, a `ctypes` binding over
+  `MvCameraControl.dll`), USB3 Vision transport
+- Hardware trigger via camera Line0 (or as wired), configured through the GenICam nodes
+  `TriggerMode` / `TriggerSource` / `TriggerActivation` using `MV_CC_SetEnumValue`
+- Frame delivery by blocking pull (`MV_CC_GetImageBuffer` / `MV_CC_FreeImageBuffer`), not by the
+  SDK's callback API — see SDD §4.1
 
 ### 5.3 REST control API (summary)
 
@@ -401,7 +421,10 @@ containing the fields listed in FR-701.
 ```json
 {
   "service": {
-    "restListenAddress": "127.0.0.1", "restPort": 8080, "logLevel": "INFO"
+    "restListenAddress": "127.0.0.1", "restPort": 8080, "logLevel": "INFO",
+    "logDir": "logs", "logMaxBytes": 52428800, "logBackupCount": 20,
+    "maxMemoryBudgetMB": 900,
+    "diagnosticImageDir": "diagnostics", "diagnosticImagesEnabled": false
   },
   "rabbitmq": {
     "host": "127.0.0.1", "port": 5672, "vhost": "/",
@@ -418,8 +441,12 @@ containing the fields listed in FR-701.
     "triggerKind": "HARDWARE",
     "groupingWindowMs": 200,
     "localQueueDepth": 4,
+    "bufferPoolSize": 18,
     "triggerPitchMm": 460.0,
-    "exposureCeilingUs": 800
+    "exposureCeilingUs": 800,
+    "hotplugPollIntervalMs": 3000,
+    "watchdogTimeoutMs": 28000,
+    "expectTriggers": true
   },
   "cameraDefaults": {
     "width": 2448, "height": 2048, "offsetX": 0, "offsetY": 0,
@@ -445,6 +472,7 @@ containing the fields listed in FR-701.
 |---|---|
 | OP-101 | FCAS SHALL be installed as a Windows Service with `SERVICE_AUTO_START` (delayed start, so USB enumeration completes before first camera scan). |
 | OP-102 | FCAS SHALL provide install / uninstall / start / stop commands. |
+| **OP-109** | **FCAS SHALL be deployed as a pinned virtual environment at a fixed, documented path on the vision box**, provisioned offline from a wheelhouse. The service registration SHALL reference that environment's interpreter explicitly; it SHALL NOT depend on `PATH` resolution of `python`, on a user profile, or on a per-user environment variable. |
 | OP-103 | FCAS SHALL not require an interactive desktop session. |
 | OP-104 | FCAS SHALL handle service stop requests gracefully — stop grabbing, close cameras, close broker connection, flush logs — within 10 s. |
 | OP-105 | Service recovery SHALL be configured to restart automatically on failure. |
@@ -511,10 +539,14 @@ stateDiagram-v2
 | 7 | **Confirm broker placement** — vision box (recommended, §2.5) vs Jetson vs separate host | CON-010, FR-508 |
 | 8 | **Confirm `x-message-ttl` value** against physical distance from camera to marking station — a frame older than TTL describes fabric that has already passed | FR-504 |
 | 9 | Team acknowledgement: best-effort delivery means fabric passing during a consumer or broker outage has **no image record**; only the sequence gap is recorded | CON-005, FR-506 |
+| ~~10~~ | ~~No Python runtime installed.~~ **Closed 2026-08-11** — CPython 3.12.10 x64 installed all-users on the development PC and the project venv provisioned; the MVS binding imports and reports SDK `0x4080003`. The **vision box** is still unprovisioned — tracked as item 13 | CON-011, ASM-008, OP-109 |
+| **11** | **Cost of publishing a 15 MB body through `pika` is unmeasured.** The framing arithmetic is confirmed: `pika` caps `frame_max` at 131 072 and rejects larger values, so each image is split into **115** AMQP body frames. The wall-clock cost is still unknown. Measure at Unit 06 against NFR-101; if it does not fit the latency budget, the fallback is a different AMQP client, not a change to the contract | NFR-101, FR-501 |
+| **12** | **`MVCAM_COMMON_RUNENV` scope on the vision box is unconfirmed.** Confirmed **machine**-scope on the development PC, so the mechanism works; the vision box is untested. If it is user-scope there, the service account cannot resolve the MVS binding and the service will fail to start with a confusing import error. The install preflight (OP-109) must check it regardless | ASM-008, OP-109 |
+| **13** | **Offline wheelhouse for the vision box not yet built.** The development PC installed from PyPI over the internet. A pinned, offline install must be proven before deployment | NFR-306, OP-109 |
 
 ---
 
 ## 9. Next step
 
-Implementation per `SDD-camera-acquisition-service.md` v2.0, following the build sequence in
+Implementation per `SDD-camera-acquisition-service.md` v3.0, following the build sequence in
 its §15.

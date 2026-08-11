@@ -53,11 +53,13 @@ Hardware is not always available, and only **one** physical camera exists during
 
 Do not modify the following unless a spec explicitly requires it:
 
-- Hikrobot MVS SDK headers, libraries, or any file under the MVS installation directory
-- `vcpkg.json` and lockfiles, except in the unit that introduces the dependency
+- Anything under the MVS installation directory — the Python binding in
+  `…\Samples\Python\MvImport\`, the samples, the documentation. It is read-only reference. If the
+  binding needs adapting, wrap it in `fcas/camera/mvs_sdk.py`; never edit the vendor file.
+- `pyproject.toml` and `requirements.lock`, except in the unit that introduces the dependency
 - `Documents/SRS-camera-acquisition-service.md` and `Documents/SDD-camera-acquisition-service.md` —
   these change only through a deliberate decision, never as a side effect of implementation
-- Generated build output
+- Generated build and cache output
 
 ## Keeping Docs In Sync
 
@@ -90,16 +92,16 @@ Create the branch before writing code: `git checkout -b feat/NN-<name>`
 
 **2. Implement** — only what the spec says. No speculative extras.
 
-**3. Test** — build both configurations and run the full suite:
+**3. Test** — run all three gates:
 
-```
-msbuild FabricInspection.sln /p:Configuration=Debug /p:Platform=x64
-msbuild FabricInspection.sln /p:Configuration=Release /p:Platform=x64
-build\x64\Debug\FcasTests.exe
+```bash
+ruff check . && ruff format --check . && mypy --strict src tests && pytest
 ```
 
-Every test must pass, including tests from earlier units. A unit that breaks an earlier unit's
-tests is not complete.
+Every check must pass, including tests from earlier units. A unit that breaks an earlier unit's
+tests is not complete. `mypy` and `ruff` are gates on equal footing with the tests — in a
+dynamically typed language they are the only mechanical check available, and skipping them
+defers real defects to the soak run.
 
 **4. Verify** — walk the spec's checklist item by item. Check what genuinely passes. Mark
 hardware-dependent items **blocked** with a reason rather than checking them. Do not check an
@@ -124,7 +126,8 @@ Only after the commit lands do you move to the next unit.
 2. Every item on the unit's verification checklist is checked, or explicitly marked blocked with
    a reason.
 3. No invariant defined in `architecture.md` was violated.
-4. The solution builds in both Debug and Release, x64, with no new warnings.
+4. `ruff check`, `ruff format --check`, and `mypy --strict` all pass with zero findings.
 5. All tests pass — this unit's and every earlier unit's.
-6. `progress-tracker.md` reflects the completed work, not the intended work.
-7. The work is committed.
+6. Every pipeline test asserts the buffer pool returned to full size at teardown.
+7. `progress-tracker.md` reflects the completed work, not the intended work.
+8. The work is committed.

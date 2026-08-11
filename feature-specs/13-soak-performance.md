@@ -28,9 +28,28 @@ default:
 - Publish called
 - Broker confirm received
 
+Use `time.perf_counter_ns()` for stage timings — it is monotonic and has the resolution this
+needs. `time.time()` is not monotonic and will produce negative durations across a clock
+adjustment.
+
 Emit as a CSV or line-oriented log for offline analysis. Instrumentation must be cheap enough that
 enabling it does not itself change the measurement — verify by comparing throughput with it on and
-off.
+off. Accumulate into a preallocated structure and write in batches; a per-stage `log.debug()` call
+with formatting on the hot path is itself measurable in this language.
+
+### GIL and threading validation (new in the Python port)
+
+SDD §4.5 asserts that per-camera threads overlap genuinely because `ctypes` releases the GIL
+during SDK calls. This unit is where that assertion is confirmed or refuted with numbers.
+
+- Record, per camera, the wall-clock time spent inside `MV_CC_ConvertPixelTypeEx` and the
+  wall-clock span during which two or more cameras were simultaneously inside it. Genuine overlap
+  confirms the analysis.
+- Compare total CPU time against wall-clock time across the process: if the ratio never exceeds
+  ~1.0 core under load, the threads are serialising and the analysis is wrong.
+- If they do serialise, record it as a finding in `Documents/validation-report.md` and raise it —
+  the remedy is an architectural decision (a debayer worker process, or moving conversion to the
+  consumer), not a tweak.
 
 ### Latency measurement (NFR-101, AC-07)
 
@@ -63,12 +82,26 @@ Nominal rate, all cameras, broker up, consumer running. Pass conditions:
 
 Sample FCAS RSS **and** RabbitMQ/Erlang memory at a fixed interval for 7 days.
 
-- **FCAS growth must be under 5%** measured from post-warm-up baseline, not from process start
+- **FCAS growth must be under 5%** measured from post-warm-up baseline, not from process start.
+  The distinction matters more here than it did in C++: the interpreter's allocator settles over
+  the first minutes and measuring from process start would report growth that is not a leak.
 - Broker memory must stay bounded by the queue limits
 - Plot both; a slow linear climb is a leak even if it stays under 5% for 7 days, and must be
   investigated rather than accepted
 
-If a leak appears, bisect by unit — the per-unit commit history makes this tractable.
+Sample three additional series alongside RSS, because in this runtime they distinguish the kinds
+of leak that look identical from the outside:
+
+- **Pool free count.** A downward trend is a leaked lease and nothing else. This is the single most
+  informative number in the run.
+- **`len(gc.get_objects())` or `gc.get_count()`** at a coarse interval. Steady object growth with
+  flat RSS means a Python-object leak that has not yet forced the heap to grow — a real defect,
+  caught early.
+- **Thread count** (`threading.active_count()`). A climbing count means workers are being replaced
+  without being joined during hot-plug recovery.
+
+If a leak appears, bisect by unit — the per-unit commit history makes this tractable — and use
+`tracemalloc` snapshots taken hours apart to localise it.
 
 ### Fault injection matrix
 
@@ -94,7 +127,8 @@ Every row must be executed and recorded — not reasoned about.
 
 The deliverable. Contents:
 
-- Test environment: hardware, versions, config used
+- Test environment: hardware, Python and package versions from `requirements.lock`, MVS SDK
+  version, RabbitMQ and Erlang versions, config used
 - Latency results with the stage breakdown
 - Throughput results with resource utilisation
 - 24 h soak result
@@ -114,14 +148,18 @@ for 7 days.
 
 - [ ] Instrumentation adds no measurable throughput cost when enabled
 - [ ] Latency p99 at or below 300 ms across 10 000+ triggers, with stage breakdown recorded
+- [ ] The `pika` publish stage is broken out separately, closing open question 3
 - [ ] 2 triggers/s per camera sustained 1 hour with zero local drops
 - [ ] CPU utilisation under load recorded and within NFR-104
+- [ ] **Camera threads shown to overlap under load** — SDD §4.5 confirmed or refuted with numbers
 - [ ] 24 h soak: zero unexplained drops, unbroken sequence continuity
 - [ ] 7 day memory: FCAS growth under 5% from post-warm-up baseline
+- [ ] Pool free count flat across the 7-day run — no downward trend
+- [ ] Python object count and thread count flat across the 7-day run
 - [ ] Broker memory bounded by queue limits throughout
 - [ ] Every row of the fault injection matrix executed and recorded
 - [ ] Reboot test passed 5 consecutive times
 - [ ] `Documents/validation-report.md` complete with evidence for every acceptance criterion
 - [ ] Any failed criterion is either fixed or recorded as an accepted risk with rationale
-- [ ] All unit tests pass, Units 01–12
+- [ ] All tests pass, Units 01–12
 - [ ] Committed as `feat(unit-13): soak and performance validation`

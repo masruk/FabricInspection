@@ -1,87 +1,96 @@
-# Unit 01: Solution Skeleton, Config, Logging, Console Mode
+# Unit 01: Package Skeleton, Config, Logging, Console Mode
 
 ## Goal
 
-Create the Visual Studio solution with four projects, a `Fcas.exe` that runs in console mode,
+Create the Python package with its `src/` layout and entry points, a `fcas run --console` that
 loads and validates a JSON configuration file, initialises structured logging, and exits cleanly.
 Invalid configuration is fatal and names every offending field. No camera or broker code.
 
 ## Design
 
-Console-first. `--console` is the development entry point and stays working for the life of the
-project. The Windows Service wrapper comes in Unit 09 and must not be introduced here.
+Console-first. `fcas run --console` is the development entry point and stays working for the life
+of the project. The Windows Service wrapper comes in Unit 09 and must not be introduced here.
 
 All output follows the log format in `ui-context.md`: timestamp with milliseconds, five-character
 padded level, seven-character padded component tag. Tags used in this unit: `service`, `config `.
 
 Error codes follow `E_<DOMAIN>_<REASON>` from `code-standards.md`. This unit establishes the
-`Status` type every later unit returns.
+`FcasError` hierarchy every later unit raises, and the three quality gates (`ruff`, `mypy
+--strict`, `pytest`) that every later unit must keep green.
 
 ## Implementation
 
-### Solution and projects
+### Prerequisite
 
-Create `FabricInspection.sln` with four projects per `architecture.md`:
+Unit 00 in `00-build-plan.md` must be complete: CPython 3.12 **64-bit** installed, venv created,
+and the MVS binding confirmed importable. Do not start this unit before that check passes.
 
-| Project | Type | Contents |
-| --- | --- | --- |
-| `FcasCore` | Static library | All of `src/` except `main.cpp` |
-| `Fcas` | Console app | `main.cpp`, links `FcasCore` |
-| `FcasCtl` | Console app | Stub only in this unit — prints version and exits |
-| `FcasTests` | Console app | GoogleTest runner, links `FcasCore` |
+### Packaging
 
-Configure x64 only, Debug and Release, toolset v145, `/std:c++17`, warning level 4 with the
-project's own warnings as errors. Remove the Win32 platform entirely.
+Create `pyproject.toml` at the repo root with:
 
-Create `props/Common.props` holding settings shared by all projects and all configurations:
-output directory `build\$(Platform)\$(Configuration)\`, intermediate directory outside the source
-tree, C++ language standard, warning level. Import it from every `.vcxproj`. Do not duplicate
-these settings per configuration.
+- Project metadata, `requires-python = ">=3.12,<3.13"`
+- `src/` layout (`[tool.setuptools.packages.find] where = ["src"]` or the hatchling equivalent)
+- Runtime dependency: `pydantic>=2`
+- Dev dependencies: `pytest`, `pytest-timeout`, `mypy`, `ruff`
+- Entry points:
 
-Create `.vcxproj.filters` for each project so Solution Explorer mirrors the on-disk folders.
+```toml
+[project.scripts]
+fcas    = "fcas.__main__:main"
+fcasctl = "fcas.fcasctl.__main__:main"
+```
 
-### Dependencies
+- `[tool.ruff]` with the rule set enabled, line length 100, and a **banned-imports rule** reserving
+  `MvImport` to `fcas.camera.mvs_sdk` and `pika` to `fcas.publish` — configure it now so the
+  boundary is enforced from the first commit rather than retrofitted.
+- `[tool.mypy]` with `strict = true` over `src` and `tests`.
+- `[tool.pytest.ini_options]` registering the `broker` marker and a default timeout.
 
-Use vcpkg in manifest mode with Visual Studio integration. Create `vcpkg.json` at the repo root
-declaring only what this unit needs:
+Generate `requirements.lock` with exact pinned versions (`pip freeze` or `pip-compile`). Install
+with `pip install -e ".[dev]"`.
 
-- `nlohmann-json` — configuration parsing
-- `spdlog` — structured logging with rotation
-- `gtest` — unit tests
-
-Do not add rabbitmq-c, cpp-httplib, or anything else yet.
-
-Enable vcpkg manifest mode in the project properties. Verify a clean clone restores packages and
-builds without manual steps.
+Do not add `pika`, `flask`, `waitress`, `requests`, or `pywin32` yet.
 
 ### `.gitignore`
 
-Add entries for `.vs/`, `build/`, `x64/`, `*.user`, `vcpkg_installed/`, and MSBuild intermediates.
+`.venv/`, `__pycache__/`, `*.pyc`, `.mypy_cache/`, `.ruff_cache/`, `.pytest_cache/`, `build/`,
+`dist/`, `*.egg-info/`, `logs/`, `diagnostics/`.
 
-### `src/common`
+### `src/fcas/common`
 
-`Error.h` — `ErrorCode` enum covering the `E_CFG_*` and `E_SVC_*` domains, and the `Status` struct
-carrying `code`, `sdkRet`, `amqpRet`, and `message`, with an `ok()` accessor. `sdkRet` and
-`amqpRet` are unused here, but fix the shape now so later units do not churn it.
+`errors.py` — `ErrorCode` enum covering the `E_CFG_*` and `E_SVC_*` domains, and the `FcasError`
+base carrying `code`, `message`, `sdk_ret`, and `amqp_ret`. Subclasses `ConfigError` and
+`ServiceError`. `sdk_ret` and `amqp_ret` are unused here, but fix the shape now so later units do
+not churn it.
 
-`Version.h` — compile-time version string plus a `Version()` accessor.
+`version.py` — version string plus an accessor. Read it from the package metadata rather than
+duplicating it in two places.
 
-`Types.h` — `CameraPosition` enum (`LEFT`, `CENTER`, `RIGHT`, `UNKNOWN`) with string conversion
+`types.py` — `CameraPosition` enum (`LEFT`, `CENTER`, `RIGHT`, `UNKNOWN`) with string conversion
 both ways, and the `ServiceState` enum from `ui-context.md`. Position parsing is case-sensitive
 and rejects anything not in the enum.
 
-### `src/config`
+`paths.py` — resolve a possibly-relative path against the **package installation directory**, not
+`os.getcwd()`. Unit 09 depends on this being right from the start; retrofitting it after the
+service fails to find its config is the standard way this bug gets found.
 
-`Config.h/.cpp` — plain structs mirroring SRS §5.4: `ServiceConfig`, `RabbitMqConfig`,
-`AcquisitionConfig`, `CameraSettings`, `CameraEntry`, root `Config`. Include the RabbitMQ and
-acquisition fields now even though nothing reads them yet — the schema comes from the SRS, and
-later units should find their fields already present.
+### `src/fcas/config`
 
-Loading merges `cameraDefaults` into each `cameras` entry, per-camera values overriding defaults.
+`schema.py` — pydantic v2 models mirroring SRS §5.4: `ServiceConfig`, `RabbitMqConfig`,
+`AcquisitionConfig`, `CameraSettings`, `CameraEntry`, root `Config`. JSON field names stay
+`lowerCamelCase` (the file format is the contract); Python attributes are `snake_case` via
+`alias` + `populate_by_name`. Include the RabbitMQ and acquisition fields now even though nothing
+reads them yet — the schema comes from the SRS, and later units should find their fields already
+present.
 
-`ConfigValidator.h/.cpp` — validation runs over the whole config and collects **all** errors
-before returning, never failing on the first. Each error names the field path, e.g.
-`cameras[1].exposureUs`.
+`loader.py` — read the file, merge `cameraDefaults` into each `cameras` entry with per-camera
+values overriding defaults, then validate.
+
+Validation runs over the whole config and collects **all** errors before returning, never failing
+on the first. pydantic already does this; the job here is to render its `ValidationError` into the
+project's log format, one line per error, each naming the field path
+(`cameras[1].exposureUs: must be positive, got -1`).
 
 Rules enforced in this unit:
 
@@ -91,36 +100,48 @@ Rules enforced in this unit:
 - `exposureUs` positive; exceeding `acquisition.exposureCeilingUs` is a **warning**, not an
   error (FR-206)
 - `gainDb` not negative
-- `queueMaxLength`, `localQueueDepth`, `messageTtlMs`, `groupingWindowMs` positive
+- `queueMaxLength`, `localQueueDepth`, `messageTtlMs`, `groupingWindowMs`, `bufferPoolSize`
+  positive
 - `restPort` and broker `port` in 1–65535
 - `logLevel` one of `ERROR`, `WARN`, `INFO`, `DEBUG`
 - `triggerKind` one of `HARDWARE`, `SOFTWARE`, `FREERUN`
 
 Credentials are referenced indirectly. A `passwordRef` of form `env:NAME` resolves from the
-environment at load. The resolved value is stored but **never** logged.
+environment at load. Store the resolved value in a field whose `repr` is redacted (pydantic
+`SecretStr`) so it cannot reach a log line by accident.
 
-### `src/telemetry/Logger`
+### `src/fcas/telemetry/logging_setup.py`
 
-Created in this unit despite the folder otherwise belonging to Unit 10 — logging is needed from
+Created in this unit despite the package otherwise belonging to Unit 10 — logging is needed from
 the first line of code.
 
-Wrap spdlog behind a small interface so call sites do not depend on it directly. Rotating file
-sink plus console sink, both using the exact format from `ui-context.md`. Path, rotation size,
-and retention from config. Level from `logLevel`. Expose component-tagged helpers so a call site
-names its tag once.
+- A custom `logging.Formatter` producing the exact line format from `ui-context.md`, including
+  padding. The component tag derives from the logger's package (`fcas.camera.*` → `camera `), so
+  call sites never pass it by hand.
+- `RotatingFileHandler` with path, size, and backup count from config.
+- A console handler attached **only** in console mode. Unit 09 depends on this switch existing.
+- Level from `logLevel`.
+- Call sites use `logging.getLogger(__name__)` and lazy `%s` formatting.
 
-### `src/service`
+### `src/fcas/service/app.py`
 
-`ServiceApp.h/.cpp` — the platform-independent orchestrator. In this unit: load config, validate,
-init logger, log a configuration summary with credentials redacted, log version, transition to
-`READY`, wait for shutdown, tear down in reverse order. Structure `start()` and `stop()` so later
-units add subsystems without restructuring.
+`ServiceApp` — the hosting-independent orchestrator. In this unit: load config, validate, init
+logging, log a configuration summary with credentials redacted, log version and interpreter
+version, transition to `READY`, wait for shutdown on an `Event`, tear down in reverse order.
+Structure `start()` and `stop()` so later units add subsystems without restructuring.
 
-Owns `ServiceState` and a `transitionTo()` that logs old state, new state, and cause.
+Owns `ServiceState` and a `transition_to()` that logs old state, new state, and cause.
 
-`main.cpp` — parse `--console`, `--config <path>`, `--version`, `--help`. Default config path is
-`config/fcas.config.json` relative to the executable. No arguments prints usage and exits 2.
-Ctrl+C handler requests graceful shutdown.
+Install `threading.excepthook` here so it is in place before any unit adds a thread.
+
+### `src/fcas/__main__.py`
+
+`argparse` with subcommands, matching the surface in `ui-context.md`. This unit implements
+`run --console`, `version`, and the `--config` option; the rest are declared and exit with a
+"not implemented in this unit" message rather than being invented early.
+
+No arguments prints usage and exits 2. `SIGINT` requests graceful shutdown.
+Default config path is `config/fcas.config.json` resolved via `paths.py`.
 
 Exit codes: `0` clean, `1` runtime failure, `2` usage error, `3` configuration invalid.
 
@@ -129,31 +150,42 @@ Exit codes: `0` clean, `1` runtime failure, `2` usage error, `3` configuration i
 Commit a working default matching SRS §5.4, with known serial `DB0717739` mapped to `LEFT` and
 two clearly-marked placeholder entries for `CENTER` and `RIGHT`.
 
-### `tests/unit/config_test.cpp`
+### `tests/unit/test_config.py`
 
 Cover: valid config loads; defaults merge and per-camera values override; duplicate serial
 rejected; duplicate position rejected; invalid position string rejected; out-of-range port
 rejected; invalid log level rejected; exposure above ceiling warns but still loads; multiple
-simultaneous errors all reported; `env:` reference resolves and never appears in log output.
+simultaneous errors all reported in one run; `env:` reference resolves and never appears in log
+output or in `repr()` of the config object.
+
+### `tests/unit/test_paths.py`
+
+Cover: a relative path resolves against the package directory, not the process CWD (change the
+CWD in the test and assert it makes no difference); an absolute path passes through unchanged.
 
 ## Dependencies
 
-- `nlohmann-json`, `spdlog`, `gtest` via vcpkg manifest
+- Runtime: `pydantic`
+- Dev: `pytest`, `pytest-timeout`, `mypy`, `ruff`
 
 ## Verify when done
 
-- [ ] Solution opens in Visual Studio and builds Debug and Release x64 with no warnings
-- [ ] `msbuild FabricInspection.sln /p:Configuration=Release /p:Platform=x64` succeeds from a clean tree
-- [ ] Only x64 exists as a platform; Win32 is absent from the solution
-- [ ] `Fcas.exe --version` prints the version and exits 0
-- [ ] `Fcas.exe` with no arguments prints usage and exits 2
-- [ ] `Fcas.exe --console` loads config, logs startup, reaches `READY`, exits 0 on Ctrl+C
-- [ ] `Fcas.exe --console --config <bad file>` reports every invalid field by path and exits 3
+- [ ] `pip install -e ".[dev]"` succeeds in a clean venv
+- [ ] `ruff check .` and `ruff format --check .` pass with zero findings
+- [ ] `mypy --strict src tests` passes with zero errors
+- [ ] `pytest` passes
+- [ ] `fcas version` prints the version and exits 0
+- [ ] `fcas` with no arguments prints usage and exits 2
+- [ ] `fcas run --console` loads config, logs startup, reaches `READY`, exits 0 on Ctrl+C
+- [ ] `fcas run --console --config <bad file>` reports every invalid field by path and exits 3
 - [ ] A config with a duplicate serial and an invalid position reports **both** errors in one run
 - [ ] Log output matches `ui-context.md` exactly, including padding
 - [ ] Rotating log file is created and rotates at the configured size
-- [ ] No credential value appears in any log line or console output
-- [ ] `FcasTests.exe` passes all tests
-- [ ] No MVS SDK or AMQP header is referenced anywhere in this unit
-- [ ] `.gitignore` excludes all build output; `git status` is clean after a build
-- [ ] `context/progress-tracker.md` updated; committed as `feat(unit-01): solution skeleton, config, logging, console mode`
+- [ ] No credential value appears in any log line, console output, or `repr()` of the config
+- [ ] Running from a different working directory finds the config and writes logs to the same
+      place — path resolution does not depend on CWD
+- [ ] No `MvImport` or `pika` import exists anywhere; the ruff banned-import rule is configured
+      and active
+- [ ] `print()` appears nowhere in `src/`
+- [ ] `.gitignore` excludes all build and cache output; `git status` is clean after a test run
+- [ ] `context/progress-tracker.md` updated; committed as `feat(unit-01): package skeleton, config, logging, console mode`

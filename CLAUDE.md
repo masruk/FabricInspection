@@ -1,8 +1,18 @@
-# This is a C++17 Windows Service, not a web application
+# This is a Python 3.12 Windows Service, not a web application
 
-This project has no web framework, no database, and no browser UI. Do not apply
-web-application patterns. The deliverable is a native Windows service that drives
-industrial cameras through a vendor C SDK and publishes to a message broker.
+This project has no database and no browser UI. It has a nine-endpoint local REST API
+for operator control and nothing more — do not apply web-application patterns to it.
+The deliverable is an unattended Windows service that drives industrial cameras through
+a vendor `ctypes` SDK binding and publishes 15 MB images to a message broker, 24/7.
+
+Flask appears here only as the transport for that control API. There is no ORM, no
+migration, no template, no session, no front end. If a change starts to look like a web
+app, the boundary is wrong.
+
+The implementation language changed from C++17 to Python at v3.0 of the SRS and SDD.
+**Only the language changed.** The message contract, topology, correlation algorithm,
+state machine, and acceptance criteria are identical. Any Python-specific decision is
+recorded in SDD §16 (translation map) — if you need a new one, record it there too.
 
 ## Application Building Context
 

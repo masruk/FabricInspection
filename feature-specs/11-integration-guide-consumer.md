@@ -1,4 +1,4 @@
-# Unit 11: Integration Guide and Python Example Consumer
+# Unit 11: Integration Guide and Example Consumer
 
 ## Goal
 
@@ -20,6 +20,12 @@ Two things the consumer must get right, both easy to get wrong and both invisibl
    Sequence discontinuity is the *only* signal that fabric went uninspected.
 
 The example is reference code, not production code, and must say so.
+
+> **Note on the language change.** FCAS is now Python too, which makes it tempting to hand the ML
+> team an import from `fcas` instead of a documented contract. Do not. The contract is the
+> deliverable and the boundary; a shared module would couple their deployment to ours and would
+> quietly become the real interface. `examples/consumer.py` uses `pika` directly, reads the
+> headers by name, and imports nothing from `fcas`.
 
 ## Implementation
 
@@ -45,25 +51,32 @@ Written for someone who has never seen this codebase.
   when FCAS is stopped
 - **Requirement references** so a reader can find the authority in the SRS
 
+State explicitly that the contract is language-neutral and that FCAS being written in Python
+implies nothing about what the consumer must be written in.
+
 ### `examples/consumer.py`
 
-Runnable reference consumer using `pika`. Single file, heavily commented, no framework.
+Runnable reference consumer using `pika`. Single file, heavily commented, no framework, **no
+import from `fcas`**.
 
 Structure:
 
-- Connect and declare **passively** — the consumer must never create queues; FCAS owns topology.
-  Passive declaration also gives a clear error if FCAS has not run yet.
+- Connect and declare **passively** (`queue_declare(passive=True)`) — the consumer must never
+  create queues; FCAS owns topology. Passive declaration also gives a clear error if FCAS has not
+  run yet.
 - Consume all three queues on one connection
 - A `SliceAssembler` keyed by `trigger_id`, holding partial groups with a configurable timeout.
   On timeout, emit the partial group and record which positions were missing — never wait forever.
 - A `GapDetector` tracking last `sequence` per camera, emitting a clear warning naming the
   missing range and the fabric position span it corresponds to
-- Convert the body to a numpy array with correct shape and dtype
+- Convert the body to a numpy array with correct shape and dtype:
+  `np.frombuffer(body, dtype=np.uint8).reshape(height, width, 3)`
 - Print a per-slice summary: `trigger_id`, positions present, `position_mm`, and any gap detected
 - `--save` writes assembled slices to disk for visual confirmation
 - Clean shutdown on Ctrl+C: cancel consumers, ack outstanding, close
 
-Include a `requirements.txt` pinning `pika` and `numpy`.
+Include a `requirements.txt` pinning `pika` and `numpy`, separate from the service's lockfile —
+the consumer runs on the Jetson, not the vision box.
 
 State clearly at the top of the file that it is a reference implementation demonstrating the
 contract, not production inference code.
@@ -76,18 +89,20 @@ correct output looks like, and how to induce a gap to see detection work.
 ### Verification of the contract itself
 
 Use this unit to check the contract is genuinely complete. Anything the consumer needs that is not
-in a header is a contract defect — fix it in `ui-context.md`, the SRS, and `MessageBuilder`, not by
-patching around it in the example.
+in a header is a contract defect — fix it in `ui-context.md`, the SRS, and
+`fcas/publish/message.py`, not by patching around it in the example.
 
 ## Dependencies
 
-- Python 3.8+ with `pika` and `numpy` — consumer side only. Nothing new in the C++ build.
+- `pika` and `numpy` — consumer side only, pinned in `examples/requirements.txt`. `numpy` is
+  **not** added to the service's dependencies.
 
 ## Verify when done
 
 - [ ] `Documents/integration-guide.md` covers topology, headers, body format, correlation, gap
       detection, ack/prefetch, and failure modes
 - [ ] `examples/consumer.py` runs against a live service and prints assembled slices
+- [ ] `examples/consumer.py` imports nothing from `fcas`
 - [ ] Slices assemble correctly with all three cameras present
 - [ ] With one camera stopped, partial slices emit after the timeout naming the missing position —
       no hang
@@ -102,5 +117,5 @@ patching around it in the example.
       real acceptance test for this unit (AC-10)
 - [ ] Any header the consumer needed that was missing has been added to the contract, not worked
       around
-- [ ] All C++ unit tests still pass, Units 01–10
-- [ ] Committed as `feat(unit-11): integration guide and Python example consumer`
+- [ ] Service tests still pass, Units 01–10
+- [ ] Committed as `feat(unit-11): integration guide and example consumer`

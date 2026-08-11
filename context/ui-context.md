@@ -105,6 +105,30 @@ HTTP status codes: `200` success, `400` invalid input, `404` unknown resource,
 `409` invalid state for the operation, `500` internal failure. The `code` field carries the
 numeric FCAS error code; `0` means success.
 
+## Service Command Surface (`fcas`)
+
+The service package installs one entry point for the service itself, separate from the operator
+CLI. These are the only invocations; do not invent others.
+
+```
+fcas run --console [--config <path>] [--mock-cameras N]
+                                         # foreground; the development loop.
+                                         # --mock-cameras adds N synthetic cameras alongside any
+                                         # real one, so one camera can exercise the 3-camera path
+fcas list-cameras [--config <path>]      # enumerate and print the mapping table, then exit
+fcas capture N [--config <path>]         # diagnostic capture to disk, then exit
+fcas measure-skew N [--config <path>]    # commissioning: inter-camera skew distribution
+fcas install [--account <name>] [--config <path>]   # register the Windows Service (elevated)
+fcas uninstall                                       # (elevated)
+fcas version
+```
+
+Exit codes: `0` clean, `1` runtime failure, `2` usage error, `3` configuration invalid.
+No arguments prints usage and exits `2`.
+
+Under the SCM the same code runs with no console handler attached and no stdout. Nothing in the
+service prints; everything logs.
+
 ## CLI (`fcasctl`)
 
 Thin client over the REST API. It contains no logic of its own.
@@ -155,8 +179,11 @@ One line per event. Fields are ordered and stable so logs stay greppable.
 2026-08-02 14:33:12.005 [ERROR] [publish] connect failed amqp=-9 (socket closed) retry in 1s
 ```
 
+- Produced by a single custom `logging.Formatter`. Call sites use
+  `logging.getLogger(__name__)` and lazy `%s` formatting; they never build the line themselves.
 - Timestamp with milliseconds, level padded to five characters, component tag padded to seven.
 - Component tags: `service`, `config `, `camera `, `pipelin`, `publish`, `control`, `health `.
+  The tag is derived from the module's package, not passed by hand at each call site.
 - State transitions always log old state, new state, and the cause in parentheses.
 - Drops always log `reason=`, `position=`, and `sequence=`.
 - Vendor failures always include the raw code (`sdk=0x80000004`, `amqp=-9`).

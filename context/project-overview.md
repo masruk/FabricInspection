@@ -2,12 +2,12 @@
 
 ## Overview
 
-FCAS is an unattended Windows service running on a Hikrobot vision box in a textile mill. It
-drives three USB3 area-scan cameras that image fabric moving on an inspection line, captures a
-synchronised set of images on every hardware trigger, converts them to RGB8, and publishes them
-to RabbitMQ where an AI inference service on an NVIDIA Jetson consumes them to detect defects.
-FCAS owns image acquisition and delivery only — it performs no inference and makes no defect
-decisions.
+FCAS is an unattended Windows service, written in Python 3.12, running on a Hikrobot vision box
+in a textile mill. It drives three USB3 area-scan cameras that image fabric moving on an
+inspection line, captures a synchronised set of images on every hardware trigger, converts them
+to RGB8, and publishes them to RabbitMQ where an AI inference service on an NVIDIA Jetson
+consumes them to detect defects. FCAS owns image acquisition and delivery only — it performs no
+inference and makes no defect decisions.
 
 ## Goals
 
@@ -24,7 +24,8 @@ decisions.
 
 1. Vision box boots; Windows starts FCAS automatically with no operator login.
 2. FCAS loads and validates its configuration file; invalid config is fatal and refuses to start.
-3. FCAS initialises the MVS SDK, checks its memory budget, and pre-allocates the image buffer pool.
+3. FCAS initialises the MVS Python SDK, checks its memory budget, and pre-allocates the image
+   buffer pool.
 4. FCAS enumerates USB3 cameras and maps each serial number to a logical position: LEFT, CENTER, RIGHT.
 5. FCAS applies each camera's configuration profile and arms hardware trigger mode.
 6. FCAS connects to the RabbitMQ broker and declares its exchange and per-camera queues idempotently.
@@ -78,7 +79,7 @@ decisions.
 
 ### In Scope
 
-- USB3 Hikrobot camera control via the MVS SDK on Windows
+- USB3 Hikrobot camera control via the MVS Python SDK on Windows
 - Hardware, software, and free-run triggering
 - Bayer to RGB8 conversion on the vision box
 - Trigger correlation and shared ID assignment
@@ -87,7 +88,8 @@ decisions.
 - Windows Service lifecycle, auto-start, and self-recovery
 - REST + CLI configuration and control
 - Logging, metrics, telemetry, and health monitoring
-- Message contract documentation and a Python example consumer
+- Message contract documentation and an example consumer
+- Offline-installable pinned deployment (virtual environment + Windows Service registration)
 
 ### Out Of Scope
 

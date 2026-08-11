@@ -25,15 +25,21 @@ by patching code.
 
 ### Trigger configuration
 
-Extend `CameraDevice::configureTrigger()` to fully apply hardware trigger mode:
+Extend `CameraDevice.configure_trigger()` to fully apply hardware trigger mode, using
+`MV_CC_SetEnumValue` / `MV_CC_SetEnumValueByString` / `MV_CC_SetFloatValue` on the GenICam nodes:
 
 - `TriggerMode` on
 - `TriggerSource` from config (`Line0` by default)
 - `TriggerActivation` — rising or falling edge from config
 - `TriggerDelay` in µs from config
-- Line debouncer time from config, to reject contact bounce from a proximity sensor
-- Verify each node exists on the camera before setting it; report a clear error naming the node if
-  the camera does not support it
+- `LineDebouncerTime` from config, to reject contact bounce from a proximity sensor
+- Verify each node exists on the camera before setting it — `MV_CC_GetEnumValue` on an absent node
+  returns an error rather than raising, so check the return and report a clear message naming the
+  node if the camera does not support it. Node names vary by model; do not assume the one camera
+  on hand is representative.
+- Prefer `MV_CC_SetEnumValueByString("TriggerSource", "Line0")` over numeric enum values where the
+  binding offers it: the string is readable in config and in logs, and numeric enum values are not
+  stable across camera models.
 
 Applied identically to all three cameras. Any camera that fails trigger configuration must not
 silently fall back to free-run — that would produce untriggered frames that corrupt correlation.
@@ -48,12 +54,18 @@ silently fall back to free-run — that would produce untriggered frames that co
 
 ### Skew measurement
 
-Add a `--measure-skew N` diagnostic mode: capture N trigger events and report, per camera,
-the distribution of host-timestamp offsets from the first camera in each group — min, max, mean,
-p99.
+Implement `fcas measure-skew N`: capture N trigger events and report, per camera, the distribution
+of `nHostTimeStamp` offsets from the first camera in each group — min, max, mean, p99.
+
+Note what this number actually contains: real inter-camera trigger jitter, plus USB transfer skew,
+plus any delay between the SDK returning the frame and the worker thread reading its timestamp. On
+a threaded runtime that last term is not zero. If measured skew comes out surprisingly large,
+check whether the timestamp is the SDK's `nHostTimeStamp` (correct — set when the frame arrives)
+or a `time.time()` captured in Python (wrong — includes scheduling delay). The correlator must use
+the SDK's.
 
 This produces the number that validates the grouping window. Record the measured value in
-`progress-tracker.md` and resolve open question 5.
+`progress-tracker.md` and resolve open question 8.
 
 Decision rule: the grouping window must exceed measured p99 skew by at least 10×, and stay well
 below the minimum trigger interval. If measured skew makes that impossible, the window needs
@@ -61,7 +73,7 @@ re-derivation and the finding goes into the SDD.
 
 ### Trigger pitch calibration
 
-Add a `--calibrate-pitch` procedure documented in `Documents/commissioning-guide.md`:
+Document the calibration procedure in `Documents/commissioning-guide.md`:
 
 1. Mark the fabric at a known start position
 2. Run a known number of trigger events
@@ -69,7 +81,7 @@ Add a `--calibrate-pitch` procedure documented in `Documents/commissioning-guide
 4. Compute actual pitch = distance / trigger count
 5. Set `acquisition.triggerPitchMm` to the measured value
 
-Record the measured pitch in `progress-tracker.md` and resolve open question 4.
+Record the measured pitch in `progress-tracker.md` and resolve open question 7.
 
 ### Overlap verification
 
@@ -95,11 +107,15 @@ None new. Requires: three cameras, trigger source wired in parallel to all three
 
 ## Verify when done
 
+- [ ] `ruff`, `mypy --strict`, and `pytest` all pass
 - [ ] All three cameras accept hardware trigger configuration; any failure is reported, not silently ignored
+- [ ] A camera missing a trigger node produces a clear error naming the node, not a silent fallback
 - [ ] One trigger pulse produces **exactly one** message per camera — no extras, no misses
 - [ ] All three messages from one pulse share the same `trigger_id` (AC-04)
 - [ ] 1000 consecutive triggers produce 3000 messages with no correlation errors
-- [ ] `--measure-skew` reports the real inter-camera skew distribution
+- [ ] `fcas measure-skew` reports the real inter-camera skew distribution
+- [ ] The correlator's timestamp is confirmed to be the SDK's `nHostTimeStamp`, not a Python-side
+      clock reading
 - [ ] Measured p99 skew is at least 10× below the grouping window, or the window is re-derived and documented
 - [ ] Trigger pitch is measured and `triggerPitchMm` set to the real value
 - [ ] `position_mm` matches physical position on the roll within tolerance
@@ -109,6 +125,6 @@ None new. Requires: three cameras, trigger source wired in parallel to all three
 - [ ] Motion blur at full line speed is within the ~0.5 px target (AC-11)
 - [ ] Blocking the trigger for a period produces no frames and no errors — an idle line is not a fault
 - [ ] `fcasctl trigger` correctly returns `409` while hardware trigger is active
-- [ ] Measured skew and pitch recorded in `progress-tracker.md`; open questions 4 and 5 resolved
-- [ ] All unit tests pass, Units 01–11
+- [ ] Measured skew and pitch recorded in `progress-tracker.md`; open questions 7 and 8 resolved
+- [ ] All tests pass, Units 01–11
 - [ ] Committed as `feat(unit-12): hardware trigger and position accumulation`
