@@ -718,13 +718,23 @@ are exceptions internally and a result envelope at the boundaries.**
 | Service | `ServiceError` (`E_SVC_*`) | ERROR/FATAL | Watchdog restart or SCM recovery |
 
 ```python
-@dataclass(frozen=True, slots=True)
 class FcasError(Exception):
-    code: ErrorCode
-    message: str
-    sdk_ret: int | None = None      # raw MVS return, preserved as given (logged as hex)
-    amqp_ret: int | None = None     # raw AMQP/broker reply code, preserved
+    def __init__(self, code: ErrorCode, message: str, *,
+                 sdk_ret: int | None = None,     # raw MVS return, logged as hex
+                 amqp_ret: int | None = None):   # raw AMQP/broker reply code
+        super().__init__(message)
+        self.code, self.message = code, message
+        self.sdk_ret, self.amqp_ret = sdk_ret, amqp_ret
+
+    def __str__(self) -> str:                    # "[E_CAM_OPEN_FAILED] ... sdk=0x80000004"
+        ...
 ```
+
+> **Not a dataclass**, despite the rest of the design favouring them. A
+> `@dataclass(frozen=True, slots=True)` exception renders as `(1003, 'msg')` under
+> `str()` — verified against CPython 3.12 — and that tuple is what would reach the log
+> file. On an unattended box the log is the only diagnostic, so the message has to
+> survive formatting.
 
 **Rule (unchanged):** raw SDK and AMQP return codes are never discarded — every wrapped error
 carries the original value so field diagnosis can reference vendor documentation directly. `raise

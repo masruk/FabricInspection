@@ -1,0 +1,75 @@
+{
+  "service": {
+    "restListenAddress": "127.0.0.1",
+    "restPort": 8080,
+    "logLevel": "INFO",
+    "logDir": "logs",
+    "logMaxBytes": 52428800,
+    "logBackupCount": 20,
+    "maxMemoryBudgetMB": 900,
+    "diagnosticImageDir": "diagnostics",
+    "diagnosticImagesEnabled": false
+  },
+  "rabbitmq": {
+    "host": "127.0.0.1",
+    "port": 5672,
+    "vhost": "/",
+    "username": "fcas",
+    "passwordRef": "env:FCAS_MQ_PASSWORD",
+    "exchange": "fabric.frames",
+    "telemetryExchange": "fabric.telemetry",
+    "queueMaxLength": 3,
+    "queueOverflow": "drop-head",
+    "messageTtlMs": 5000,
+    "publisherConfirms": true,
+    "reconnectInitialMs": 1000,
+    "reconnectMaxMs": 30000
+  },
+  "acquisition": {
+    "triggerKind": "HARDWARE",
+    "groupingWindowMs": 200,
+    "localQueueDepth": 4,
+    "bufferPoolSize": 18,
+    "triggerPitchMm": 460.0,
+    "exposureCeilingUs": 800,
+    "hotplugPollIntervalMs": 3000,
+    "watchdogTimeoutMs": 28000,
+    "expectTriggers": true
+  },
+  "cameraDefaults": {
+    "width": 2448,
+    "height": 2048,
+    "offsetX": 0,
+    "offsetY": 0,
+    "exposureUs": 700,
+    "gainDb": 6.0,
+    "contrast": 0,
+    "autoWhiteBalance": false,
+    "bayerQuality": "BALANCED",
+    "triggerSource": "Line0",
+    "triggerActivation": "RisingEdge",
+    "triggerDelayUs": 0,
+    "debounceUs": 50,
+    "freeRunFps": 5.0
+  },
+  "cameras": [
+    {
+      "serial": "DB0717739",
+      "position": "LEFT",
+      "routingKey": "camera.left",
+      "exposureUs": 700
+    },
+    {
+      "serial": "PLACEHOLDER-CENTER",
+      "position": "CENTER",
+      "routingKey": "camera.center",
+      "exposureUs": 720
+    },
+    {
+      "serial": "PLACEHOLDER-RIGHT",
+      "position": "RIGHT",
+      "routingKey": "camera.right",
+      "exposureUs": 700
+    }
+  ]
+}

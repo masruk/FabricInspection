@@ -1,0 +1,104 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fcas"
+version = "0.1.0"
+description = "Fabric Camera Acquisition Service - captures synchronised images and publishes them to RabbitMQ"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic>=2,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-timeout",
+    "mypy",
+    "ruff",
+]
+
+[project.scripts]
+fcas = "fcas.__main__:main"
+fcasctl = "fcas.fcasctl.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+fcas = ["py.typed"]
+
+# ---------------------------------------------------------------------------
+# ruff - formatting and lint. A gate, not a suggestion (NFR-305).
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+# ruff formats Python code blocks inside Markdown. The specs and the SRS/SDD are
+# protected documents that change only by deliberate decision, never as a side effect
+# of running a formatter (ai-workflow-rules.md -> Protected Files), and their snippets
+# are illustrative rather than compilable. Keep the formatter out of them entirely.
+extend-exclude = ["*.md", "Documents", "feature-specs", "context", "current-issues"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # import sorting
+    "N",         # pep8-naming
+    "UP",        # pyupgrade
+    "B",         # bugbear
+    "C4",        # comprehensions
+    "SIM",       # simplify
+    "TID",       # tidy-imports - carries the layer boundary rule below
+    "PTH",       # use pathlib, never string path concatenation
+    "T20",       # no print() in service code
+    "RUF",
+]
+
+# The layer boundary from architecture.md. In C++ the include graph enforced
+# this; here nothing does but us, so it is enforced by lint AND by an
+# import-graph test added in Unit 02.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"MvCameraControl_class".msg = "MVS SDK imports belong only in fcas.camera.mvs_sdk (architecture.md invariant 10)."
+"MvImport".msg = "MVS SDK imports belong only in fcas.camera.mvs_sdk (architecture.md invariant 10)."
+"CameraParams_header".msg = "MVS SDK imports belong only in fcas.camera.mvs_sdk (architecture.md invariant 10)."
+"pika".msg = "AMQP imports belong only in fcas.publish (architecture.md invariant 10)."
+
+[tool.ruff.lint.per-file-ignores]
+# The one module permitted to import the vendor binding.
+"src/fcas/camera/mvs_sdk.py" = ["TID251"]
+# The one package permitted to import pika.
+"src/fcas/publish/*" = ["TID251"]
+# The two command-line front ends are the only places allowed to write to a
+# terminal: `fcas` must report config errors before logging exists (the config is
+# what says where to log), and `fcasctl` output IS its product. Nothing they call
+# may print - the ban still holds for every module underneath them.
+"src/fcas/__main__.py" = ["T201"]
+"src/fcas/fcasctl/*" = ["T201"]
+# Tests may import either side to assert the boundary holds.
+"tests/*" = ["TID251"]
+
+# ---------------------------------------------------------------------------
+# mypy - the compiler this language does not have (NFR-305).
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+show_error_codes = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 60
+addopts = "-q"
+markers = [
+    "broker: requires a running RabbitMQ broker; skipped cleanly when unavailable",
+]

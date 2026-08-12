@@ -4,11 +4,11 @@ Update this file after every meaningful implementation change.
 
 ## Current Phase
 
-- Planning complete, re-baselined for Python. Implementation not started.
+- Implementation started. Unit 01 complete.
 
 ## Current Goal
 
-- Unit 01 — Package skeleton, configuration, logging, and console mode.
+- Unit 02 — MVS Python SDK wrapper and camera enumeration.
 
 ## Completed
 
@@ -21,6 +21,10 @@ Update this file after every meaningful implementation change.
 - Six-file context system under `context/`, re-baselined for Python.
 - Build plan (`feature-specs/00-build-plan.md`) — 13 units in dependency order.
 - All 13 unit specs rewritten for Python and available for review before coding starts.
+- **Unit 00 — runtime provisioning.** CPython 3.12.10 x64, venv, all dependencies, MVS
+  binding verified. See Environment below.
+- **Unit 01 — package skeleton, config, logging, console mode.** 93 tests; `ruff`,
+  `mypy --strict`, and `pytest` all green. Details below.
 
 ## In Progress
 
@@ -28,10 +32,62 @@ Update this file after every meaningful implementation change.
 
 ## Next Up
 
-- Unit 01 — Package skeleton, config, logging, console mode. **Unblocked** — the runtime is
-  installed and verified (see Environment below).
-- Unit 02 — MVS Python SDK wrapper and camera enumeration.
+- Unit 02 — MVS Python SDK wrapper and camera enumeration. **Needs the camera reconnected**
+  — enumeration returned zero devices at last check.
 - Unit 03 — Single-camera capture, debayer, buffer pool.
+
+## Unit 01 — what was built
+
+`pyproject.toml` (`src/` layout, two console scripts, ruff/mypy/pytest config),
+`fcas.common` (errors, types, paths, version), `fcas.config` (pydantic schema + loader),
+`fcas.telemetry.logging_setup`, `fcas.service.app`, the `fcas` and `fcasctl` entry points,
+the shipped `config/fcas.config.json`, and 93 tests.
+
+**Verified live, not just by unit test:** console run reaches `READY` and exits 0 on
+Ctrl+Break; invalid config reports every problem in one run and exits 3; path resolution is
+independent of the working directory; all four exit codes; the log format matches
+`ui-context.md` including padding; no credential reaches stdout, stderr, or the log file.
+
+### Two defects the live run caught that the unit tests did not
+
+1. **`Event.wait()` with no timeout is not interruptible by a signal on Windows.** CPython
+   only dispatches signal handlers in the main thread between bytecodes, and an untimed
+   `wait()` ends up in an uninterruptible lock acquire — so Ctrl+C never reached the
+   handler and the process had to be killed. The original unit test set the event from
+   another thread, which bypasses the signal path entirely and passed. Fixed with a
+   `SHUTDOWN_POLL_S` wait loop plus a regression test. **This matters for Unit 09**: the
+   same wait backs `SvcStop`, and OP-104 gives shutdown a 10 s budget.
+2. **`ruff format` rewrites Python code blocks inside Markdown**, which silently reformatted
+   the SDD and four feature specs — files that `ai-workflow-rules.md` protects from exactly
+   that. Reverted, and `extend-exclude` now keeps the formatter out of all documentation.
+
+### Decisions taken during Unit 01
+
+- **`FcasError` is a plain exception, not a dataclass.** A `@dataclass(frozen=True,
+  slots=True)` exception renders as `(1003, 'msg')` under `str()`, and that tuple is what
+  would reach the log file. SDD §9 corrected to match.
+- **`print()` is permitted in the two CLI front ends only.** `fcas` must report config
+  errors before logging exists; `fcasctl` output is its product. Nothing they call may
+  print. `code-standards.md` refined; enforced by ruff `T20` per-file ignores.
+- **`SIGBREAK` is handled alongside `SIGINT`/`SIGTERM`.** Windows delivers Ctrl+Break and a
+  supervisor's `CTRL_BREAK_EVENT` as `SIGBREAK`; without it a process-group signal would
+  kill the service instead of stopping it cleanly.
+- **`CameraPosition.UNKNOWN` is rejected in configuration.** It is the internal sentinel for
+  an unmapped camera (FR-105); accepting it from config would let an operator configure a
+  camera into a state the pipeline treats as "not ours".
+- **Duplicate detection runs as a second pass over the raw document.** A pydantic
+  `model_validator` never runs once a field has failed, so a config with both an invalid
+  position and a duplicate serial would report only one. Two passes, one combined report.
+- **Config validation errors are reported all at once**, each naming its field path, because
+  a restart on an inspection line is expensive and one-error-per-restart is not acceptable.
+
+### Deviation from the spec, flagged
+
+Unit 01 transitions to `READY` after loading configuration, as `01-project-skeleton.md`
+specifies. SRS §6.1 gates `IDLE → READY` on "config loaded **and** ≥1 camera open". There is
+no camera subsystem yet, so `READY` here means "configuration is valid and nothing else
+exists". **Unit 04 must tighten this to match the SRS** when `CameraManager` lands. Raised
+rather than silently resolved, per `ai-workflow-rules.md`.
 
 ## Environment (provisioned 2026-08-11, development PC)
 

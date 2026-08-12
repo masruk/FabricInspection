@@ -163,7 +163,12 @@ Python has no destructors you can rely on. This section is the substitute, and i
   24/7 scale. Per-frame detail belongs at `DEBUG`.
 - Use lazy formatting (`log.info("x=%s", x)`), never f-strings in log calls — the argument must
   not be formatted when the level is disabled.
-- `print()` appears nowhere in service code. Under Session 0 there is no stdout.
+- `print()` is banned everywhere except the two command-line front ends,
+  `fcas/__main__.py` and `fcas/fcasctl/`. `fcas` needs it to report configuration errors
+  before logging exists (the config is what says where to log), and `fcasctl` output *is*
+  its product. **Nothing they call may print** — the ban still holds for every module
+  underneath them, because under Session 0 there is no stdout. Enforced by ruff `T20`
+  with those two per-file ignores.
 - Service lifecycle events also go to the Windows Event Log via `servicemanager`.
 
 ## Testing
